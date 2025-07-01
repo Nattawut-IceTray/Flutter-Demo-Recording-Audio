@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 
 void main() {
@@ -41,10 +42,12 @@ class _VoiceRecorderPageState extends State<VoiceRecorderPage> {
   
   List<Recording> _recordings = [];
   Recording? _currentRecording;
+  Directory? _cacheDir;
   
   @override
   void initState() {
     super.initState();
+    _initCacheDirectory();
     _initRecorder();
     _initPlayer();
     _loadRecordings();
@@ -55,6 +58,14 @@ class _VoiceRecorderPageState extends State<VoiceRecorderPage> {
     _recorder.closeRecorder();
     _player.closePlayer();
     super.dispose();
+  }
+  
+  Future<void> _initCacheDirectory() async {
+    final tempDir = await getTemporaryDirectory();
+    _cacheDir = Directory('${tempDir.path}/recordings');
+    if (!await _cacheDir!.exists()) {
+      await _cacheDir!.create(recursive: true);
+    }
   }
   
   Future<void> _initRecorder() async {
@@ -73,9 +84,10 @@ class _VoiceRecorderPageState extends State<VoiceRecorderPage> {
   }
   
   Future<void> _loadRecordings() async {
-    final appDir = Directory('/storage/emulated/0/Download/recordings');
-    if (await appDir.exists()) {
-      final files = appDir.listSync();
+    if (_cacheDir == null) return;
+    
+    if (await _cacheDir!.exists()) {
+      final files = _cacheDir!.listSync();
       setState(() {
         _recordings = files
             .where((file) => file.path.endsWith('.aac'))
@@ -90,15 +102,10 @@ class _VoiceRecorderPageState extends State<VoiceRecorderPage> {
   }
   
   Future<void> _startRecording() async {
-    if (!_isRecorderInitialized) return;
-    
-    final appDir = Directory('/storage/emulated/0/Download/recordings');
-    if (!await appDir.exists()) {
-      await appDir.create(recursive: true);
-    }
+    if (!_isRecorderInitialized || _cacheDir == null) return;
     
     final fileName = 'recording_${DateTime.now().millisecondsSinceEpoch}.aac';
-    final filePath = '${appDir.path}/$fileName';
+    final filePath = '${_cacheDir!.path}/$fileName';
     
     await _recorder.startRecorder(
       toFile: filePath,
@@ -172,13 +179,58 @@ class _VoiceRecorderPageState extends State<VoiceRecorderPage> {
     });
   }
   
+  Future<void> _clearAllRecordings() async {
+    if (_cacheDir == null) return;
+    
+    for (final recording in _recordings) {
+      final file = File(recording.path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+    
+    setState(() {
+      _recordings.clear();
+      _currentRecording = null;
+      _isPlaying = false;
+    });
+  }
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Voice Recorder'),
+        title: const Text('Voice Recorder (Cache)'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         elevation: 2,
+        actions: [
+          if (_recordings.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.clear_all),
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Clear All Recordings'),
+                    content: const Text('Are you sure you want to delete all recordings? This action cannot be undone.'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          _clearAllRecordings();
+                        },
+                        child: const Text('Delete All', style: TextStyle(color: Colors.red)),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+        ],
       ),
       body: Column(
         children: [
@@ -252,7 +304,7 @@ class _VoiceRecorderPageState extends State<VoiceRecorderPage> {
           // Recordings List
           Expanded(
             child: _recordings.isEmpty
-                ? const Center(
+                ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -275,6 +327,22 @@ class _VoiceRecorderPageState extends State<VoiceRecorderPage> {
                           style: TextStyle(
                             fontSize: 14,
                             color: Colors.grey,
+                          ),
+                        ),
+                        SizedBox(height: 16),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                          ),
+                          child: Text(
+                            'Recordings are stored in app cache',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.blue,
+                            ),
                           ),
                         ),
                       ],
